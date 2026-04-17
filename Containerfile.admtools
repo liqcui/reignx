@@ -1,0 +1,196 @@
+# Multi-arch image for macOS (arm64/amd64) based on OpenShift admtools
+# Supports both SSH login and ReignX Agent
+FROM quay.io/openshift-psap-qe/admtools:latest
+
+LABEL maintainer="ReignX Team <noreply@reignx.io>"
+LABEL description="OpenShift admtools with SSH and ReignX Agent support"
+LABEL version="1.0"
+
+# Install SSH server and dependencies
+USER root
+
+RUN if command -v apt-get > /dev/null; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends \
+        openssh-server \
+        sudo \
+        curl \
+        ca-certificates && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/*; \
+    elif command -v yum > /dev/null; then \
+      yum install -y \
+        openssh-server \
+        sudo \
+        curl \
+        ca-certificates && \
+      yum clean all; \
+    elif command -v dnf > /dev/null; then \
+      dnf install -y \
+        openssh-server \
+        sudo \
+        curl \
+        ca-certificates && \
+      dnf clean all; \
+    elif command -v apk > /dev/null; then \
+      apk add --no-cache \
+        openssh-server \
+        sudo \
+        curl \
+        ca-certificates; \
+    fi
+
+# Configure SSH server
+RUN mkdir -p /var/run/sshd /root/.ssh && \
+    chmod 700 /root/.ssh && \
+    # Generate host keys if they don't exist
+    ssh-keygen -A 2>/dev/null || true && \
+    # Configure SSH to allow root login with password (for testing)
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config 2>/dev/null || \
+    echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || \
+    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config && \
+    # Allow public key authentication
+    sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || \
+    echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config
+
+# Set default root password (override with --build-arg ROOT_PASSWORD=xxx)
+ARG ROOT_PASSWORD=changeme
+RUN echo "root:${ROOT_PASSWORD}" | chpasswd
+
+# Create reignx user for agent (override with --build-arg USER_PASSWORD=xxx)
+ARG USER_PASSWORD=changeme
+RUN useradd -m -s /bin/bash reignx || adduser -D -s /bin/bash reignx && \
+    echo "reignx:${USER_PASSWORD}" | chpasswd && \
+    echo "reignx ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Copy ReignX Agent binary (will be built separately)
+# Assumes you've built the agent for linux/arm64 and linux/amd64
+COPY --chmod=755 bin/agent-linux-* /usr/local/bin/ 2>/dev/null || true
+
+# Detect architecture and create symlink to correct agent binary
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+      ln -sf /usr/local/bin/agent-linux-arm64 /usr/local/bin/reignx-agent 2>/dev/null || \
+      ln -sf /usr/local/bin/agent /usr/local/bin/reignx-agent; \
+    else \
+      ln -sf /usr/local/bin/agent-linux-amd64 /usr/local/bin/reignx-agent 2>/dev/null || \
+      ln -sf /usr/local/bin/agent /usr/local/bin/reignx-agent; \
+    fi
+
+# Create agent configuration directory
+RUN mkdir -p /etc/reignx && \
+    chown reignx:reignx /etc/reignx
+
+# Create agent config template
+RUN cat > /etc/reignx/agent.yaml.template <<'EOF'
+server: ${REIGNX_SERVER:-localhost:50051}
+node_id: ${NODE_ID}
+tls:
+  enabled: ${TLS_ENABLED:-false}
+  ca_cert: ${TLS_CA_CERT:-/etc/reignx/ca.crt}
+  client_cert: ${TLS_CLIENT_CERT:-/etc/reignx/client.crt}
+  client_key: ${TLS_CLIENT_KEY:-/etc/reignx/client.key}
+  skip_verify: ${TLS_SKIP_VERIFY:-false}
+heartbeat_interval: ${HEARTBEAT_INTERVAL:-30s}
+metrics_interval: ${METRICS_INTERVAL:-60s}
+logging:
+  level: ${LOG_LEVEL:-info}
+  format: ${LOG_FORMAT:-json}
+EOF
+
+# Create entrypoint script
+RUN cat > /entrypoint.sh <<'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting ReignX Container..."
+echo "Architecture: $(uname -m)"
+echo "OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2)"
+
+# Generate SSH host keys if missing
+if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
+    echo "Generating SSH host keys..."
+    ssh-keygen -A
+fi
+
+# Start SSH server
+echo "Starting SSH server..."
+if command -v /usr/sbin/sshd > /dev/null; then
+    /usr/sbin/sshd -D &
+elif command -v sshd > /dev/null; then
+    sshd -D &
+fi
+SSH_PID=$!
+
+# Setup ReignX Agent if enabled
+if [ "${ENABLE_AGENT}" = "true" ] || [ "${ENABLE_AGENT}" = "1" ]; then
+    echo "ReignX Agent enabled"
+
+    # Generate config from template
+    if [ -f /etc/reignx/agent.yaml.template ]; then
+        echo "Generating agent config..."
+        envsubst < /etc/reignx/agent.yaml.template > /etc/reignx/agent.yaml
+    fi
+
+    # Start agent if binary exists
+    if [ -f /usr/local/bin/reignx-agent ]; then
+        echo "Starting ReignX Agent..."
+        echo "  Server: ${REIGNX_SERVER:-localhost:50051}"
+        echo "  Node ID: ${NODE_ID:-$(hostname)}"
+
+        su - reignx -c "/usr/local/bin/reignx-agent --config /etc/reignx/agent.yaml" &
+        AGENT_PID=$!
+        echo "Agent started with PID: $AGENT_PID"
+    else
+        echo "Warning: ReignX Agent binary not found at /usr/local/bin/reignx-agent"
+        echo "Agent mode disabled. SSH access only."
+    fi
+fi
+
+# Print connection info
+echo ""
+echo "=========================================="
+echo "Container started successfully!"
+echo "=========================================="
+echo "SSH Access:"
+echo "  Host: localhost (or container IP)"
+echo "  Port: 22"
+echo "  User: root / Password: (set via ROOT_PASSWORD)"
+echo "  User: reignx / Password: (set via USER_PASSWORD)"
+echo ""
+if [ "${ENABLE_AGENT}" = "true" ] || [ "${ENABLE_AGENT}" = "1" ]; then
+    echo "ReignX Agent:"
+    echo "  Status: Running"
+    echo "  Server: ${REIGNX_SERVER:-localhost:50051}"
+    echo "  Node ID: ${NODE_ID:-$(hostname)}"
+fi
+echo "=========================================="
+echo ""
+
+# Keep container running
+if [ -n "$SSH_PID" ]; then
+    wait $SSH_PID
+else
+    # Fallback: keep container alive
+    tail -f /dev/null
+fi
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+# Expose SSH port
+EXPOSE 22
+
+# Environment variables
+ENV ENABLE_AGENT=false \
+    REIGNX_SERVER=localhost:50051 \
+    NODE_ID= \
+    TLS_ENABLED=false \
+    TLS_SKIP_VERIFY=false \
+    LOG_LEVEL=info \
+    LOG_FORMAT=json \
+    HEARTBEAT_INTERVAL=30s \
+    METRICS_INTERVAL=60s
+
+ENTRYPOINT ["/entrypoint.sh"]

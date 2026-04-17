@@ -1,0 +1,137 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: reignxd-service
+  namespace: reignx
+  labels:
+    app: reignxd
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+    - port: 9000
+      targetPort: 9000
+      name: grpc
+  selector:
+    app: reignxd
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reignxd
+  namespace: reignx
+  labels:
+    app: reignxd
+    app.kubernetes.io/name: reignxd
+    app.kubernetes.io/component: api-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: reignxd
+  template:
+    metadata:
+      labels:
+        app: reignxd
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: reignx
+      containers:
+        - name: reignxd
+          image: reignx/reignxd:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+            - containerPort: 9000
+              name: grpc
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: url
+            - name: ETCD_ENDPOINTS
+              value: "http://etcd-0.etcd-headless:2379,http://etcd-1.etcd-headless:2379,http://etcd-2.etcd-headless:2379"
+            - name: NATS_URL
+              value: "nats://nats-service:4222"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: ENVIRONMENT
+              value: "production"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+            - name: certs
+              mountPath: /app/certs
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+      volumes:
+        - name: config
+          configMap:
+            name: reignx-config
+        - name: certs
+          secret:
+            secretName: reignx-certs
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reignxd-hpa
+  namespace: reignx
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reignxd
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

@@ -1,0 +1,60 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output
+*.out
+
+# Go workspace file
+go.work
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite
+
+# Cache
+/tmp/
+cache/
+
+# Certificates
+*.pem
+*.key
+*.crt
+*.csr
+
+# Config (keep examples)
+config/*.yaml
+config/*.yml
+!config/*.example.yaml
+!config/*.example.yml
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Environment and secrets
+.env
+*.env
+.secrets

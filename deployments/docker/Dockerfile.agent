@@ -1,0 +1,62 @@
+# Multi-stage build for ReignX Agent
+
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make ca-certificates tzdata
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o reignx-agent \
+    ./cmd/agent
+
+# Runtime stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    bash \
+    curl \
+    openssh-client
+
+# Create non-root user
+RUN addgroup -g 1000 reignx && \
+    adduser -D -u 1000 -G reignx reignx
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/reignx-agent /app/reignx-agent
+
+# Copy configuration files
+COPY --from=builder /build/config /app/config
+
+# Create directories
+RUN mkdir -p /app/certs /app/cache /tmp/reignx-scripts && \
+    chown -R reignx:reignx /app /tmp/reignx-scripts
+
+# Switch to non-root user
+USER reignx
+
+# Health check (agent self-check)
+HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
+    CMD pgrep -x reignx-agent || exit 1
+
+# Run the binary
+ENTRYPOINT ["/app/reignx-agent"]

@@ -1,0 +1,40 @@
+# Multi-stage build for database migration tool
+
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make ca-certificates
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o migrate \
+    ./cmd/migrate
+
+# Runtime stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+
+# Copy binary and migrations
+COPY --from=builder /build/migrate /app/migrate
+COPY --from=builder /build/migrations /app/migrations
+
+# Run migrations
+ENTRYPOINT ["/app/migrate"]
+CMD ["up"]

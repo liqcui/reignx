@@ -1,0 +1,8 @@
+DEFAULT install
+PROMPT 0
+TIMEOUT 100
+
+LABEL install
+    MENU LABEL Install {{ .OSType }} {{ .OSVersion }} - {{ .Hostname }}
+    KERNEL {{ .KernelPath }}
+    APPEND initrd={{ .InitrdPath }} inst.ks={{ .KickstartURL }} console=tty0 console=ttyS0,115200n8

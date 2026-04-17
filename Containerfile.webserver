@@ -1,0 +1,41 @@
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apk add --no-cache git make nodejs npm
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the frontend
+WORKDIR /build/web/frontend
+RUN npm install && npm run build
+
+# Build the Go binary
+WORKDIR /build
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o webserver ./cmd/webserver
+
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/webserver .
+
+# Copy static files
+COPY --from=builder /build/web/static ./web/static
+
+# Copy config
+COPY config/webserver-container.yaml ./config/webserver.yaml
+
+# Expose port
+EXPOSE 3000
+
+CMD ["./webserver", "-config", "config/webserver.yaml"]

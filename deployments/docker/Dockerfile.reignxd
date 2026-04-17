@@ -1,0 +1,59 @@
+# Multi-stage build for ReignX Daemon
+
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make ca-certificates tzdata
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o reignxd \
+    ./cmd/apiserver
+
+# Runtime stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+# Create non-root user
+RUN addgroup -g 1000 reignx && \
+    adduser -D -u 1000 -G reignx reignx
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/reignxd /app/reignxd
+
+# Copy configuration files
+COPY --from=builder /build/config /app/config
+
+# Create certificates directory
+RUN mkdir -p /app/certs && chown -R reignx:reignx /app
+
+# Switch to non-root user
+USER reignx
+
+# Expose ports
+EXPOSE 8080 9000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+
+# Run the binary
+ENTRYPOINT ["/app/reignxd"]

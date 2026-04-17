@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: reignx
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secrets.yaml
+  - rbac.yaml
+  - postgres-statefulset.yaml
+  - etcd-statefulset.yaml
+  - nats-deployment.yaml
+  - reignxd-deployment.yaml
+  - monitoring.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: reignx-platform
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: reignx/reignxd
+    newTag: v1.0.0

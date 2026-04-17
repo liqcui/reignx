@@ -1,0 +1,164 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: docker.io/library/postgres:15
+    container_name: reignx-postgres
+    environment:
+      POSTGRES_USER: reignx
+      POSTGRES_PASSWORD: CHANGEME_DB_PASSWORD
+      POSTGRES_DB: reignx
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reignx"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - reignx-network
+
+  # API Server (Control Plane)
+  apiserver:
+    build:
+      context: .
+      dockerfile: Containerfile.apiserver
+    container_name: reignx-apiserver
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=reignx
+      - DATABASE_PASSWORD=CHANGEME_DB_PASSWORD
+      - DATABASE_NAME=reignx
+    ports:
+      - "50051:50051"  # gRPC
+      - "8080:8080"    # HTTP API
+      - "9090:9090"    # Metrics
+    networks:
+      - reignx-network
+    restart: unless-stopped
+
+  # Web Console Server
+  webserver:
+    build:
+      context: .
+      dockerfile: Containerfile.webserver
+    container_name: reignx-webserver
+    depends_on:
+      - apiserver
+    environment:
+      - API_SERVER_URL=http://apiserver:8080
+    ports:
+      - "3000:3000"    # Web Console
+    networks:
+      - reignx-network
+    restart: unless-stopped
+
+  # Agent 1 - Simulates bare metal server 1 (with SSH enabled)
+  agent-1:
+    build:
+      context: .
+      dockerfile: Containerfile.agent-ssh
+    container_name: reignx-agent-1
+    depends_on:
+      - apiserver
+    environment:
+      - API_SERVER_ADDR=apiserver:50051
+      - AGENT_TAGS=env=production,role=webserver,region=us-east-1
+      - HOSTNAME=web-server-01
+    hostname: web-server-01
+    ports:
+      - "2201:22"    # SSH
+      - "9091:9091"  # Metrics
+    networks:
+      - reignx-network
+    restart: unless-stopped
+
+  # Agent 2 - Simulates bare metal server 2
+  agent-2:
+    build:
+      context: .
+      dockerfile: Containerfile.agent
+    container_name: reignx-agent-2
+    depends_on:
+      - apiserver
+    environment:
+      - API_SERVER_ADDR=apiserver:50051
+      - AGENT_TAGS=env=production,role=database,region=us-east-1
+      - HOSTNAME=db-server-01
+    hostname: db-server-01
+    ports:
+      - "9092:9091"  # Metrics
+    networks:
+      - reignx-network
+    restart: unless-stopped
+
+  # Agent 3 - Simulates bare metal server 3
+  agent-3:
+    build:
+      context: .
+      dockerfile: Containerfile.agent
+    container_name: reignx-agent-3
+    depends_on:
+      - apiserver
+    environment:
+      - API_SERVER_ADDR=apiserver:50051
+      - AGENT_TAGS=env=staging,role=webserver,region=us-west-2
+      - HOSTNAME=web-server-02
+    hostname: web-server-02
+    ports:
+      - "9093:9091"  # Metrics
+    networks:
+      - reignx-network
+    restart: unless-stopped
+
+  # Agent 4 - Simulates bare metal server 4
+  agent-4:
+    build:
+      context: .
+      dockerfile: Containerfile.agent
+    container_name: reignx-agent-4
+    depends_on:
+      - apiserver
+    environment:
+      - API_SERVER_ADDR=apiserver:50051
+      - AGENT_TAGS=env=production,role=cache,region=us-west-2
+      - HOSTNAME=cache-server-01
+    hostname: cache-server-01
+    ports:
+      - "9094:9091"  # Metrics
+    networks:
+      - reignx-network
+    restart: unless-stopped
+
+  # Agent 5 - Simulates bare metal server 5
+  agent-5:
+    build:
+      context: .
+      dockerfile: Containerfile.agent
+    container_name: reignx-agent-5
+    depends_on:
+      - apiserver
+    environment:
+      - API_SERVER_ADDR=apiserver:50051
+      - AGENT_TAGS=env=production,role=storage,region=eu-central-1
+      - HOSTNAME=storage-server-01
+    hostname: storage-server-01
+    ports:
+      - "9095:9091"  # Metrics
+    networks:
+      - reignx-network
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+
+networks:
+  reignx-network:
+    driver: bridge

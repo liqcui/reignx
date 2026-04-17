@@ -1,0 +1,188 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: bm-postgres
+    environment:
+      POSTGRES_DB: bm_solution
+      POSTGRES_USER: bm_admin
+      POSTGRES_PASSWORD: bm_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bm_admin -d bm_solution"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bm-network
+
+  # etcd for service discovery and leader election
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.12
+    container_name: bm-etcd
+    environment:
+      ETCD_NAME: etcd0
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_INITIAL_CLUSTER: etcd0=http://etcd:2380
+      ETCD_INITIAL_CLUSTER_TOKEN: bm-etcd-cluster
+      ETCD_INITIAL_CLUSTER_STATE: new
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd_data:/etcd-data
+    networks:
+      - bm-network
+
+  # NATS (optional message queue)
+  nats:
+    image: nats:2.10-alpine
+    container_name: bm-nats
+    command:
+      - "--jetstream"
+      - "--store_dir=/data"
+      - "--max_memory_store=1GB"
+      - "--max_file_store=10GB"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    networks:
+      - bm-network
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: bm-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - bm-network
+    depends_on:
+      - reignxd
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: bm-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - bm-network
+    depends_on:
+      - prometheus
+
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: bm-jaeger
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: :9411
+      COLLECTOR_OTLP_ENABLED: true
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    networks:
+      - bm-network
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: bm-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - bm-network
+
+  # ReignX Daemon (API Server + Scheduler)
+  reignxd:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.reignxd
+    container_name: bm-reignxd
+    environment:
+      DATABASE_URL: postgres://bm_admin:bm_password@postgres:5432/bm_solution?sslmode=disable
+      ETCD_ENDPOINTS: http://etcd:2379
+      NATS_URL: nats://nats:4222
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+      ENVIRONMENT: development
+      JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+      ENABLE_TRACING: "false"
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    volumes:
+      - ../../certs:/app/certs
+    networks:
+      - bm-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  # Database migration service (runs once)
+  migrate:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.migrate
+    container_name: bm-migrate
+    environment:
+      DATABASE_URL: postgres://bm_admin:bm_password@postgres:5432/bm_solution?sslmode=disable
+    networks:
+      - bm-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  etcd_data:
+  nats_data:
+  prometheus_data:
+  grafana_data:
+  redis_data:
+
+networks:
+  bm-network:
+    driver: bridge

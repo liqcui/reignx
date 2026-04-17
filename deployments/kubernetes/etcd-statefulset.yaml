@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-headless
+  namespace: reignx
+  labels:
+    app: etcd
+spec:
+  ports:
+    - port: 2379
+      name: client
+    - port: 2380
+      name: peer
+  clusterIP: None
+  selector:
+    app: etcd
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  namespace: reignx
+  labels:
+    app: etcd
+spec:
+  serviceName: etcd-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.12
+          ports:
+            - containerPort: 2379
+              name: client
+            - containerPort: 2380
+              name: peer
+          env:
+            - name: ETCD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ETCD_INITIAL_ADVERTISE_PEER_URLS
+              value: http://$(ETCD_NAME).etcd-headless:2380
+            - name: ETCD_LISTEN_PEER_URLS
+              value: http://0.0.0.0:2380
+            - name: ETCD_LISTEN_CLIENT_URLS
+              value: http://0.0.0.0:2379
+            - name: ETCD_ADVERTISE_CLIENT_URLS
+              value: http://$(ETCD_NAME).etcd-headless:2379
+            - name: ETCD_INITIAL_CLUSTER
+              value: etcd-0=http://etcd-0.etcd-headless:2380,etcd-1=http://etcd-1.etcd-headless:2380,etcd-2=http://etcd-2.etcd-headless:2380
+            - name: ETCD_INITIAL_CLUSTER_TOKEN
+              value: reignx-etcd-cluster
+            - name: ETCD_INITIAL_CLUSTER_STATE
+              value: new
+          volumeMounts:
+            - name: etcd-storage
+              mountPath: /etcd-data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+  volumeClaimTemplates:
+    - metadata:
+        name: etcd-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

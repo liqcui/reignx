@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# Pre-commit hook to prevent committing passwords and secrets
+#
+# Installation:
+#   cp hooks/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+
+echo "🔍 Running pre-commit security checks..."
+
+# Define password patterns to detect
+PATTERNS=(
+    'password.*:.*["\047][^$][^{]'  # password: "xxx" but not password: "${VAR}"
+    'passwd.*:.*["\047][^$][^{]'    # passwd: "xxx"
+    'reignx123'                       # Old password
+    'CHANGEME_DB_PASSWORD'            # Placeholder that should be replaced
+    'api_key.*:.*["\047][A-Za-z0-9]{20,}'  # API keys
+    'secret.*:.*["\047][A-Za-z0-9]{20,}'   # Secret keys
+    'token.*:.*["\047][A-Za-z0-9]{20,}'    # Tokens
+)
+
+# Files to check (staged files, exclude documentation and secrets)
+FILES=$(git diff --cached --name-only --diff-filter=ACM | \
+    grep -v '.secrets' | \
+    grep -v '.env' | \
+    grep -v 'SECURITY_FIXES.md' | \
+    grep -v 'hooks/README.md' | \
+    grep -v 'hooks/pre-commit')
+
+if [ -z "$FILES" ]; then
+    exit 0
+fi
+
+# Check each pattern
+FOUND_SECRETS=0
+for PATTERN in "${PATTERNS[@]}"; do
+    # Check staged changes
+    if git diff --cached | grep -E "$PATTERN" > /dev/null; then
+        echo "❌ ERROR: Potential password/secret found matching pattern: $PATTERN"
+        echo ""
+        echo "Matches:"
+        git diff --cached | grep -E "$PATTERN" --color=always | head -5
+        echo ""
+        FOUND_SECRETS=1
+    fi
+done
+
+# Check for common secret file patterns
+SECRET_FILES=$(echo "$FILES" | grep -E '\.(pem|key|crt|p12|pfx)$')
+if [ -n "$SECRET_FILES" ]; then
+    echo "⚠️  WARNING: You are committing certificate/key files:"
+    echo "$SECRET_FILES"
+    echo ""
+    echo "Are you sure these should be committed? (y/N)"
+    read -r response
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+        echo "Commit aborted."
+        exit 1
+    fi
+fi
+
+if [ $FOUND_SECRETS -eq 1 ]; then
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║  COMMIT REJECTED: Passwords or secrets detected!          ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Please remove hardcoded secrets and use environment variables:"
+    echo "  1. Move secrets to .env or .secrets file"
+    echo "  2. Use \${VARIABLE_NAME} instead of hardcoded values"
+    echo "  3. See .secrets.example for examples"
+    echo ""
+    echo "To bypass this check (NOT RECOMMENDED):"
+    echo "  git commit --no-verify"
+    echo ""
+    exit 1
+fi
+
+echo "✅ No secrets detected in commit"
+exit 0

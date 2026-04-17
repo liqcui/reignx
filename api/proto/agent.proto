@@ -1,0 +1,185 @@
+syntax = "proto3";
+
+package reignx.agent;
+
+option go_package = "github.com/reignx/reignx/api/proto/gen;agentpb";
+
+import "google/protobuf/timestamp.proto";
+
+// AgentService defines the gRPC service for agent-control plane communication
+service AgentService {
+  // Register registers a new agent with the control plane
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Heartbeat sends periodic heartbeat to maintain agent status
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // StreamTasks provides bidirectional streaming for task execution
+  rpc StreamTasks(stream TaskMessage) returns (stream TaskMessage);
+
+  // ReportMetrics sends system metrics to control plane
+  rpc ReportMetrics(MetricsRequest) returns (MetricsResponse);
+
+  // Disconnect gracefully disconnects the agent
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+
+  // ReportTaskResult reports task execution result
+  rpc ReportTaskResult(TaskResult) returns (TaskResultResponse);
+}
+
+// RegisterRequest sent by agent during initial registration
+message RegisterRequest {
+  string node_id = 1;
+  string hostname = 2;
+  string ip_address = 3;
+  string mac_address = 4;
+  string os_type = 5;
+  string os_version = 6;
+  string architecture = 7;
+  string agent_version = 8;
+  map<string, string> tags = 9;
+  map<string, string> metadata = 10;
+}
+
+// RegisterResponse sent by control plane after successful registration
+message RegisterResponse {
+  bool success = 1;
+  string node_id = 2;
+  string message = 3;
+  int32 heartbeat_interval_seconds = 4;
+  map<string, string> config = 5;
+}
+
+// HeartbeatRequest sent periodically by agent
+message HeartbeatRequest {
+  string node_id = 1;
+  string agent_version = 2;
+  string status = 3; // online, degraded, shutting_down
+  google.protobuf.Timestamp timestamp = 4;
+  SystemMetrics metrics = 5;
+  int32 active_tasks = 6;
+}
+
+// HeartbeatResponse acknowledges heartbeat
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  map<string, string> config_updates = 2;
+  repeated Task pending_tasks = 3; // Tasks to be executed by agent
+}
+
+// TaskMessage used for bidirectional task streaming
+message TaskMessage {
+  oneof message {
+    Task task = 1;
+    TaskResult result = 2;
+    TaskAck ack = 3;
+  }
+}
+
+// Task represents work to be executed by agent
+message Task {
+  string id = 1;
+  string job_id = 2;
+  string type = 3; // command, script, file, firmware, etc.
+  string command = 4;
+  string script = 5;
+  map<string, string> parameters = 6;
+  int32 priority = 7;
+  int32 timeout_seconds = 8;
+  int32 max_retries = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+// TaskResult sent by agent after task execution
+message TaskResult {
+  string task_id = 1;
+  bool success = 2;
+  int32 exit_code = 3;
+  string stdout = 4;
+  string stderr = 5;
+  string error = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp completed_at = 8;
+  int64 duration_ms = 9;
+  map<string, string> metadata = 10;
+}
+
+// TaskAck acknowledges task receipt
+message TaskAck {
+  string task_id = 1;
+  bool received = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// SystemMetrics contains system health metrics
+message SystemMetrics {
+  double cpu_percent = 1;
+  double memory_percent = 2;
+  double disk_percent = 3;
+  double load_avg_1m = 4;
+  double load_avg_5m = 5;
+  double load_avg_15m = 6;
+  uint64 uptime_seconds = 7;
+}
+
+// MetricsRequest contains detailed metrics
+message MetricsRequest {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  SystemMetrics system = 3;
+  repeated ProcessMetrics processes = 4;
+  repeated DiskMetrics disks = 5;
+  repeated NetworkMetrics network = 6;
+}
+
+// ProcessMetrics contains per-process metrics
+message ProcessMetrics {
+  int32 pid = 1;
+  string name = 2;
+  double cpu_percent = 3;
+  double memory_percent = 4;
+  string status = 5;
+}
+
+// DiskMetrics contains disk usage metrics
+message DiskMetrics {
+  string device = 1;
+  string mount_point = 2;
+  uint64 total_bytes = 3;
+  uint64 used_bytes = 4;
+  uint64 free_bytes = 5;
+  double percent = 6;
+}
+
+// NetworkMetrics contains network statistics
+message NetworkMetrics {
+  string interface = 1;
+  uint64 bytes_sent = 2;
+  uint64 bytes_recv = 3;
+  uint64 packets_sent = 4;
+  uint64 packets_recv = 5;
+  uint64 errors_in = 6;
+  uint64 errors_out = 7;
+}
+
+// MetricsResponse acknowledges metrics receipt
+message MetricsResponse {
+  bool acknowledged = 1;
+}
+
+// DisconnectRequest sent before agent shutdown
+message DisconnectRequest {
+  string node_id = 1;
+  string reason = 2;
+}
+
+// DisconnectResponse acknowledges disconnect
+message DisconnectResponse {
+  bool acknowledged = 1;
+}
+
+// TaskResultResponse acknowledges task result receipt
+message TaskResultResponse {
+  bool acknowledged = 1;
+  string message = 2;
+}

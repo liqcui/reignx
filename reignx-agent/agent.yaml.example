@@ -1,0 +1,62 @@
+# ReignX Agent Configuration Example
+# Copy this file to /etc/reignx/agent.yaml and modify as needed
+
+# Server configuration
+server:
+  # ReignX control plane address
+  address: "reignx.example.com:50051"
+
+# Security configuration
+security:
+  # Enable TLS (recommended for production)
+  tls_enabled: true
+
+  # Client certificate file
+  cert_file: "/etc/reignx/agent.crt"
+
+  # Client key file
+  key_file: "/etc/reignx/agent.key"
+
+  # CA certificate file
+  ca_file: "/etc/reignx/ca.crt"
+
+# Agent configuration
+agent:
+  # Heartbeat interval in seconds
+  heartbeat_interval: 30
+
+  # Cache directory for local state
+  cache_dir: "/var/lib/reignx-agent"
+
+  # Maximum concurrent tasks
+  max_concurrency: 5
+
+# Logging configuration
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"
+
+  # Log file path (optional, logs to stderr if not set)
+  file: "/var/log/reignx-agent.log"
+
+# Task configuration
+task:
+  # Default timeout for tasks (in seconds)
+  default_timeout: 3600
+
+  # Enable task result caching for idempotency
+  enable_cache: true
+
+  # Cache TTL in days
+  cache_ttl: 30
+
+# Metrics configuration
+metrics:
+  # Enable metrics collection
+  enabled: true
+
+  # Metrics reporting interval in seconds
+  interval: 60
+
+  # Include process metrics
+  include_process_metrics: true

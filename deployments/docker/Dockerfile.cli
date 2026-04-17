@@ -1,0 +1,49 @@
+# Multi-stage build for ReignX CLI
+
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git make ca-certificates
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o reignxctl \
+    ./cmd/cli
+
+# Runtime stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates bash
+
+# Create non-root user
+RUN addgroup -g 1000 reignx && \
+    adduser -D -u 1000 -G reignx reignx
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/reignxctl /usr/local/bin/reignxctl
+
+# Make it executable
+RUN chmod +x /usr/local/bin/reignxctl
+
+# Switch to non-root user
+USER reignx
+
+# Default command
+ENTRYPOINT ["/usr/local/bin/reignxctl"]
+CMD ["--help"]
